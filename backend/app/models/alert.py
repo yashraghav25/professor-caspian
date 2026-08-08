@@ -36,6 +36,7 @@ class Alert(Base):
     )
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=True)
+    ai_summary: Mapped[str] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         Enum(AlertStatus), nullable=False, default=AlertStatus.NORMAL
     )

@@ -13,6 +13,7 @@ class AlertResponse(BaseModel):
     severity_level: str
     title: str
     reason: Optional[str]
+    ai_summary: Optional[str] = None
     status: str
     acknowledged_at: Optional[datetime]
     created_at: datetime

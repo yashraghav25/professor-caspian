@@ -56,3 +56,15 @@ def init_db():
     import app.models.preference  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+
+    # Lightweight schema patches for existing DBs (create_all won't ALTER)
+    from sqlalchemy import text, inspect
+    try:
+        insp = inspect(engine)
+        if "alerts" in insp.get_table_names():
+            cols = {c["name"] for c in insp.get_columns("alerts")}
+            if "ai_summary" not in cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE alerts ADD COLUMN ai_summary TEXT"))
+    except Exception:
+        pass

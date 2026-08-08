@@ -67,7 +67,8 @@ class EventService:
             headline=payload.get("headline", "No Headline"),
             summary=payload.get("summary"),
             source=payload.get("source_name", event.source),
-            url=payload.get("url")
+            url=payload.get("url"),
+            ai_analysis=payload.get("ai_analysis"),
         )
         self.db.add(new_event)
         self.db.commit()

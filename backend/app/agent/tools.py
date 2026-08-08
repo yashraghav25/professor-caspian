@@ -18,7 +18,7 @@ def get_portfolio_summary(user_id: int) -> Dict[str, Any]:
     try:
         service = PortfolioService(db)
         portfolio = service.get_portfolio_summary(user_id=user_id)
-        return portfolio.model_dump()
+        return portfolio.model_dump(mode="json")
     except Exception as e:
         return {"error": str(e)}
     finally:
@@ -32,7 +32,7 @@ def get_recent_alerts(user_id: int, limit: int = 5) -> List[Dict[str, Any]]:
     try:
         service = AlertService(db)
         alerts = service.get_active_alerts(user_id=user_id, limit=limit)
-        return [a.model_dump() for a in alerts]
+        return [a.model_dump(mode="json") for a in alerts]
     except Exception as e:
         return [{"error": str(e)}]
     finally:

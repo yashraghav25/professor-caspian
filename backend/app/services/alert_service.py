@@ -121,6 +121,20 @@ class AlertService:
         ).order_by(Alert.updated_at.desc()).limit(limit).all()
         
         return [AlertResponse.model_validate(a) for a in alerts]
+
+    def get_latest_active_alert(self, user_id: int) -> Optional[Alert]:
+        """Return the most recent active alert ORM object (for attaching AI summary)."""
+        return (
+            self.db.query(Alert)
+            .filter(
+                Alert.user_id == user_id,
+                Alert.status.in_(
+                    [AlertStatus.WARNING, AlertStatus.HIGH, AlertStatus.CRITICAL]
+                ),
+            )
+            .order_by(Alert.updated_at.desc())
+            .first()
+        )
         
     def get_alert(self, user_id: int, alert_id: str) -> Optional[AlertResponse]:
         alert = self.db.query(Alert).filter(

@@ -445,6 +445,11 @@ INSTRUCTIONS
 
             self._latest_ai_summary = str(analysis).strip()
             logger.info(f"Agent analysis persisted on {alert.alert_id}: {analysis[:120]}...")
+
+            # Dispatch Caspian notifications (email / telegram by severity)
+            if db_alert:
+                from app.caspian.notification_adapter import dispatch_alert_via_caspian
+                await dispatch_alert_via_caspian(db_alert)
         except Exception as e:
             logger.error(f"Agent analysis failed: {e}", exc_info=True)
             fallback = self._fallback_summary(event, impact, severity_level, score)

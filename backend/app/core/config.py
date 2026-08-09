@@ -28,9 +28,13 @@ class Settings(BaseSettings):
     # ── Caspian SDK ──
     caspian_api_key: str = ""
     caspian_base_url: str = "https://api.trycaspianai.com"
+    caspian_email_username: str = "sentinel"
 
-    # ── Telegram ──
+    # ── Notification delivery ──
+    investor_notify_email: str = "investor@sentinel.ai"
+    investor_telegram_chat_id: str = ""
     telegram_bot_token: str = ""
+    daily_report_hour: int = 18  # 24h UTC hour to send end-of-day email
 
     # ── Server ──
     backend_port: int = 8000

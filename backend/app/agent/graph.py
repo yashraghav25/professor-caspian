@@ -4,14 +4,15 @@ Compiles the state machine for the autonomous agent.
 """
 
 from langgraph.graph import StateGraph, END
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_groq import ChatGroq
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.agent.state import AgentState
 from app.agent.tools import get_portfolio_summary, get_recent_alerts, acknowledge_alert
+from app.caspian.client import get_caspian
 
 logger = get_logger("agent_graph")
 
@@ -27,8 +28,12 @@ class SentinelAgent:
         self.tools = [get_portfolio_summary, get_recent_alerts, acknowledge_alert]
         self.llm_with_tools = self.llm.bind_tools(self.tools)
         
-        self.system_prompt = """
+        caspian = get_caspian()
+        channel_guide = caspian.behavior_prompt if caspian.is_ready else ""
+        
+        self.system_prompt = f"""
         You are SentinelAI, an autonomous portfolio risk agent for retail/pro investors.
+        You monitor portfolios and communicate urgent alerts via Caspian (email + Telegram).
 
         IMPORTANT: Always use user_id=1 when calling tools (demo investor).
 
@@ -51,6 +56,8 @@ class SentinelAgent:
         3. ...
 
         Be concise, professional, and actionable. No fluff. No repeating the raw severity template.
+
+        {channel_guide}
         """
         
         self.graph = self._build_graph()
@@ -153,3 +160,67 @@ class SentinelAgent:
         # Extract final message
         final_message = result["messages"][-1].content
         return final_message
+
+    async def compose_notification(
+        self,
+        summary: str,
+        severity: str,
+        channel: str,
+        title: str = "",
+    ) -> str:
+        """Short, channel-aware alert text for Caspian delivery."""
+        if channel == "telegram":
+            rules = (
+                "Max 240 characters. Plain text only, no markdown. "
+                "Urgent tone. Include severity emoji (⚠️ or 🚨). "
+                "One-line what happened + one action. End with 'Reply ACK'."
+            )
+        else:
+            rules = (
+                "Max 400 characters. Plain text, no markdown. "
+                "Subject line feel. What happened + top action + 'Reply ACK to dismiss'."
+            )
+
+        prompt = f"""Write a {channel} alert notification for SentinelAI.
+
+Severity: {severity}
+Title: {title}
+Rules: {rules}
+
+Source analysis:
+{summary[:1200]}
+
+Output ONLY the notification text, nothing else."""
+        response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+        text = (response.content or "").strip()
+        limit = 240 if channel == "telegram" else 400
+        return text[:limit]
+
+    async def compose_daily_report(
+        self,
+        portfolio_total: float,
+        portfolio_pnl: float,
+        portfolio_pnl_pct: float,
+        holdings_summary: str,
+        news_summary: str,
+    ) -> str:
+        """End-of-day email digest — crisp but informative."""
+        prompt = f"""Write SentinelAI's end-of-day portfolio email digest.
+
+Portfolio: ${portfolio_total:,.2f} total | P/L ${portfolio_pnl:+,.2f} ({portfolio_pnl_pct:+.2f}%)
+
+Holdings:
+{holdings_summary}
+
+Today's news:
+{news_summary}
+
+Format (plain text, under 600 words):
+1. Opening line with total value and day P/L
+2. Holdings snapshot (2-3 bullet highlights)
+3. News that could move positions tomorrow (2-3 bullets)
+4. One-line outlook / watch item
+
+Keep it crisp. No markdown headers. Investor-friendly tone."""
+        response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+        return (response.content or "").strip()

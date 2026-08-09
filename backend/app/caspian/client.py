@@ -1,82 +1,117 @@
 """
-Caspian Client integration — PRD Sections 33, 40-42.
-Handles sending outbound notifications via Caspian SDK.
+Caspian SDK integration — outbound notifications + channel setup.
+Uses caspian_sdk.CommClient per SKILL.md.
 """
 
-from caspian import Caspian
+from __future__ import annotations
+
 import asyncio
+from typing import Optional
+
+from caspian_sdk import CommClient
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.models.notification import Notification, NotificationStatus
-from app.services.notification_service import NotificationService
-from app.core.database import SessionLocal
 
 logger = get_logger("caspian_client")
 
-# Initialize Caspian client globally
-caspian_client = Caspian(
-    api_key=settings.caspian_api_key, 
-    base_url=settings.caspian_base_url
-)
 
+class CaspianClient:
+    """Singleton wrapper around CommClient for SentinelAI."""
 
-async def send_notification_via_caspian(notification_id: int):
-    """
-    Sends a pending notification via Caspian SDK.
-    Looks up the alert details and builds a rich message.
-    """
-    db = SessionLocal()
-    try:
-        service = NotificationService(db)
-        notif = db.query(Notification).filter(Notification.id == notification_id).first()
-        if not notif or notif.status != NotificationStatus.PENDING:
+    _instance: Optional["CaspianClient"] = None
+
+    def __init__(self):
+        self._client: Optional[CommClient] = None
+        self._email_connection_id: Optional[str] = None
+        self._telegram_connection_id: Optional[str] = None
+        self._email_address: Optional[str] = None
+        self._telegram_address: Optional[str] = None
+        self._behavior_prompt: str = ""
+        self._initialized = False
+
+    @classmethod
+    def get(cls) -> "CaspianClient":
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    @property
+    def is_ready(self) -> bool:
+        return self._initialized and self._client is not None
+
+    @property
+    def email_address(self) -> Optional[str]:
+        return self._email_address
+
+    @property
+    def behavior_prompt(self) -> str:
+        return self._behavior_prompt
+
+    def initialize(self) -> None:
+        if self._initialized:
             return
-            
-        alert = notif.alert
-        user = alert.user
-        
-        # In a real app we'd map internal channel to Caspian provider
-        # For this hackathon, we assume the user's primary email/telegram are setup in Caspian's channel config
-        
-        # Build the message
-        severity_icon = "🔴" if alert.severity_level == "CRITICAL" else "🟠" if alert.severity_level == "HIGH" else "🟡"
-        
-        message_body = (
-            f"{severity_icon} **SentinelAI {alert.severity_level} ALERT**\n\n"
-            f"**{alert.title}**\n\n"
-            f"Score: {alert.severity_score:.1f}/100\n"
-            f"Reason: {alert.reason}\n\n"
-            f"Reply 'ACK' to acknowledge this alert and pause escalations."
-        )
-        
-        logger.info(f"Sending via Caspian ({notif.channel}) to user {user.email}")
-        
+        if not settings.caspian_api_key:
+            logger.warning("CASPIAN_API_KEY not set — notifications disabled.")
+            return
+
+        self._client = CommClient()
         try:
-            # We'll use Caspian to send the message.
-            # Assuming we find a channel or pass user ID to Caspian
-            # This requires Caspian channels to be configured
-            
-            response = await asyncio.to_thread(
-                caspian_client.messages.create,
-                to=user.email, # Or a channel ID if mapped
-                content=message_body
-            )
-            
-            logger.info(f"Caspian send success. Message ID: {response.id}")
-            service.update_notification_status(
-                notif.id, 
-                NotificationStatus.SENT, 
-                message_id=response.id
-            )
-            
+            email = self._client.connect_email(username=settings.caspian_email_username)
+            self._email_connection_id = email["id"]
+            self._email_address = email.get("address")
+            logger.info(f"Caspian email connected: {self._email_address}")
         except Exception as e:
-            logger.error(f"Caspian send failed: {e}")
-            service.update_notification_status(
-                notif.id, 
-                NotificationStatus.FAILED, 
-                error=str(e)
-            )
-            
-    finally:
-        db.close()
+            logger.error(f"Caspian email connect failed: {e}")
+
+        if settings.telegram_bot_token:
+            try:
+                tg = self._client.connect_telegram(bot_token=settings.telegram_bot_token)
+                self._telegram_connection_id = tg["id"]
+                self._telegram_address = tg.get("address")
+                logger.info(f"Caspian Telegram connected: {self._telegram_address}")
+            except Exception as e:
+                logger.error(f"Caspian Telegram connect failed: {e}")
+        else:
+            logger.info("TELEGRAM_BOT_TOKEN not set — instant Telegram alerts disabled.")
+
+        try:
+            self._behavior_prompt = self._client.behavior_prompt() or ""
+        except Exception:
+            self._behavior_prompt = ""
+
+        self._initialized = True
+
+    async def send_email(self, recipient: str, text: str) -> dict:
+        if not self._client or not self._email_connection_id:
+            raise RuntimeError("Caspian email channel not connected")
+        return await asyncio.to_thread(
+            self._client.initiate, self._email_connection_id, recipient, text
+        )
+
+    async def send_telegram(self, recipient: str, text: str) -> dict:
+        if not self._client or not self._telegram_connection_id:
+            raise RuntimeError("Caspian Telegram channel not connected")
+        return await asyncio.to_thread(
+            self._client.initiate, self._telegram_connection_id, recipient, text
+        )
+
+    async def poll_events(self, after_seq: int = 0, limit: int = 50) -> tuple[list[dict], int]:
+        if not self._client:
+            return [], after_seq
+        events = await asyncio.to_thread(
+            self._client.events, after_seq, limit
+        )
+        if not events:
+            return [], after_seq
+        max_seq = max(e.get("seq", after_seq) for e in events)
+        return events, max_seq
+
+    async def reply_in_conversation(self, conversation_id: str, text: str) -> dict:
+        if not self._client:
+            raise RuntimeError("Caspian client not initialized")
+        return await asyncio.to_thread(self._client.send_message, conversation_id, text)
+
+
+def get_caspian() -> CaspianClient:
+    return CaspianClient.get()

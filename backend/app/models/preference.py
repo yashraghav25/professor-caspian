@@ -13,8 +13,8 @@ class NotificationPreference(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
     warning_channel: Mapped[str] = mapped_column(String(50), nullable=False, default="email")
-    high_channel: Mapped[str] = mapped_column(String(50), nullable=False, default="email,telegram")
-    critical_channel: Mapped[str] = mapped_column(String(50), nullable=False, default="email,telegram")
+    high_channel: Mapped[str] = mapped_column(String(50), nullable=False, default="telegram")
+    critical_channel: Mapped[str] = mapped_column(String(50), nullable=False, default="telegram,email")
     cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
     escalation_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 

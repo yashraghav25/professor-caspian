@@ -1,1 +1,1 @@
-# caspian package
+# Caspian SDK integration package

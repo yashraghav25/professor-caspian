@@ -9,6 +9,7 @@ from typing import Dict, Any, List
 from app.core.database import SessionLocal
 from app.services.portfolio_service import PortfolioService
 from app.services.alert_service import AlertService
+from app.services.event_service import EventService
 
 
 @tool
@@ -33,6 +34,19 @@ def get_recent_alerts(user_id: int, limit: int = 5) -> List[Dict[str, Any]]:
         service = AlertService(db)
         alerts = service.get_active_alerts(user_id=user_id, limit=limit)
         return [a.model_dump(mode="json") for a in alerts]
+    except Exception as e:
+        return [{"error": str(e)}]
+    finally:
+        db.close()
+
+
+@tool
+def get_recent_news(limit: int = 6) -> List[Dict[str, Any]]:
+    """Get recent market headlines and their analysis for a timely investor conversation."""
+    db = SessionLocal()
+    try:
+        events = EventService(db).get_recent_news_events(limit=limit)
+        return [event.model_dump(mode="json") for event in events]
     except Exception as e:
         return [{"error": str(e)}]
     finally:

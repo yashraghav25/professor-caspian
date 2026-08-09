@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.agent.state import AgentState
-from app.agent.tools import get_portfolio_summary, get_recent_alerts, acknowledge_alert
+from app.agent.tools import get_portfolio_summary, get_recent_alerts, get_recent_news, acknowledge_alert
 from app.caspian.client import get_caspian
 
 logger = get_logger("agent_graph")
@@ -25,7 +25,7 @@ class SentinelAgent:
             temperature=0.2
         )
         
-        self.tools = [get_portfolio_summary, get_recent_alerts, acknowledge_alert]
+        self.tools = [get_portfolio_summary, get_recent_alerts, get_recent_news, acknowledge_alert]
         self.llm_with_tools = self.llm.bind_tools(self.tools)
         
         caspian = get_caspian()
@@ -160,6 +160,43 @@ class SentinelAgent:
         # Extract final message
         final_message = result["messages"][-1].content
         return final_message
+
+    async def answer_investor_question(self, user_id: int, question: str) -> str:
+        """Answer a normal Caspian conversation without forcing alert-report language."""
+        # Fetch the user's real context first. Conversational questions should
+        # feel informed even when there is no active incident.
+        portfolio = get_portfolio_summary.invoke({"user_id": user_id})
+        alerts = get_recent_alerts.invoke({"user_id": user_id, "limit": 3})
+        news = get_recent_news.invoke({"limit": 6})
+        prompt = """You are SentinelAI's sharp, approachable market-monitoring companion.
+You are speaking directly to an investor on a messaging channel, not writing an
+incident report. Answer their exact question first; do not open with generic
+claims that you are monitoring their portfolio.
+
+Use the portfolio context to make the answer relevant. If the user asks what
+stocks or themes to watch, provide a focused exploratory watchlist of 3-4 names
+or themes, each with a concrete catalyst and a key risk. Point out overlap or
+concentration with their existing holdings. Do not present any stock as a
+guaranteed buy and do not give personalised trade execution instructions.
+
+Be lively, specific, and concise. Use Markdown: short headings, bold names,
+and bullets. End with one useful follow-up question or watch item. A brief
+"not financial advice" note is enough; never use it as a substitute for an
+answer.
+
+Current portfolio context:
+{portfolio}
+
+Recent alert context:
+{alerts}
+
+Recent market-news context:
+{news}
+""".format(portfolio=portfolio, alerts=alerts, news=news)
+        response = await self.llm.ainvoke(
+            [SystemMessage(content=prompt), HumanMessage(content=question)]
+        )
+        return (response.content or "").strip()
 
     async def compose_notification(
         self,

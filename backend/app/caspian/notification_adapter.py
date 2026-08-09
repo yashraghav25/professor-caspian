@@ -1,7 +1,7 @@
 """
 Routes alert notifications through Caspian by severity:
-- WARNING  → email (small alert)
-- HIGH     → telegram (instant)
+- WARNING  → email only (small alert)
+- HIGH     → telegram + email (instant response plus durable record)
 - CRITICAL → telegram + email
 """
 
@@ -14,42 +14,30 @@ from app.models.alert import Alert, AlertStatus
 from app.models.notification import Notification, NotificationStatus
 from app.services.notification_service import NotificationService
 from app.caspian.client import get_caspian
-from app.agent.graph import SentinelAgent
+from app.caspian.message_builder import (
+    build_email_subject,
+    build_email_plain,
+    build_email_html,
+    build_telegram_text,
+    build_telegram_blocks,
+    build_daily_report_html,
+)
 
 logger = get_logger("caspian_notifications")
-
-DEMO_USER_ID = 1
 
 
 def _channels_for_severity(severity_level: AlertStatus) -> list[str]:
     if severity_level == AlertStatus.CRITICAL:
         return ["telegram", "email"]
     if severity_level == AlertStatus.HIGH:
-        return ["telegram"]
+        return ["telegram", "email"]
     if severity_level == AlertStatus.WARNING:
         return ["email"]
     return []
 
 
-def _fallback_message(alert: Alert, channel: str) -> str:
-    body = alert.ai_summary or alert.reason or alert.title
-    if channel == "telegram":
-        first_line = body.split("\n")[0][:200]
-        return (
-            f"⚠️ {alert.severity_level.value} — {alert.title}\n"
-            f"{first_line}\n"
-            f"Reply ACK to dismiss."
-        )
-    return (
-        f"SentinelAI {alert.severity_level.value} Alert\n\n"
-        f"{alert.title}\n\n"
-        f"{body[:600]}\n\n"
-        f"Reply ACK to acknowledge."
-    )
-
-
 async def dispatch_alert_via_caspian(alert: Alert) -> None:
-    """Queue + send notifications for an alert after AI analysis is ready."""
+    """Send notifications via Caspian after AI analysis is ready."""
     db = SessionLocal()
     try:
         service = NotificationService(db)
@@ -59,23 +47,12 @@ async def dispatch_alert_via_caspian(alert: Alert) -> None:
 
         channels = _channels_for_severity(db_alert.severity_level)
         if not channels:
+            logger.info(f"No notification channels for severity {db_alert.severity_level}")
             return
 
-        # Compose short channel-specific messages via agent
-        agent = SentinelAgent()
-        messages: dict[str, str] = {}
-        summary = db_alert.ai_summary or db_alert.reason or db_alert.title
-        for ch in channels:
-            try:
-                messages[ch] = await agent.compose_notification(
-                    summary=summary,
-                    severity=str(db_alert.severity_level.value),
-                    channel=ch,
-                    title=db_alert.title,
-                )
-            except Exception as e:
-                logger.warning(f"Agent compose failed for {ch}: {e}")
-                messages[ch] = _fallback_message(db_alert, ch)
+        logger.info(
+            f"Dispatching {channels} for {db_alert.severity_level.value} alert {db_alert.alert_id}"
+        )
 
         for ch in channels:
             notif = Notification(
@@ -87,13 +64,13 @@ async def dispatch_alert_via_caspian(alert: Alert) -> None:
             db.flush()
 
             try:
-                msg_id = await _send_on_channel(ch, messages[ch])
+                msg_id = await _send_on_channel(ch, db_alert)
                 service.update_notification_status(
                     notif.id, NotificationStatus.SENT, message_id=msg_id
                 )
-                logger.info(f"Sent {ch} notification for alert {db_alert.alert_id}")
+                logger.info(f"Caspian {ch} sent for alert {db_alert.alert_id}")
             except Exception as e:
-                logger.error(f"Failed {ch} notification: {e}")
+                logger.error(f"Caspian {ch} failed: {e}")
                 service.update_notification_status(
                     notif.id, NotificationStatus.FAILED, error=str(e)
                 )
@@ -103,35 +80,34 @@ async def dispatch_alert_via_caspian(alert: Alert) -> None:
         db.close()
 
 
-async def _send_on_channel(channel: str, text: str) -> str | None:
+async def _send_on_channel(channel: str, alert: Alert) -> str | None:
     caspian = get_caspian()
     if not caspian.is_ready:
         raise RuntimeError("Caspian not initialized")
 
     if channel == "email":
-        recipient = settings.investor_notify_email
-        result = await caspian.send_email(recipient, text)
+        subject = build_email_subject(alert)
+        plain = build_email_plain(alert)
+        html = build_email_html(alert)
+        result = await caspian.send_email(
+            settings.investor_notify_email, subject, plain, html
+        )
         return result.get("id") or result.get("status")
 
     if channel == "telegram":
-        chat_id = settings.investor_telegram_chat_id
-        if not chat_id:
-            raise RuntimeError(
-                "INVESTOR_TELEGRAM_CHAT_ID not set — message your Telegram bot first, "
-                "then add the chat id to .env"
-            )
-        result = await caspian.send_telegram(chat_id, text)
+        text = build_telegram_text(alert)
+        result = await caspian.send_telegram(text, blocks=build_telegram_blocks(alert))
         return result.get("id") or result.get("status")
 
     raise ValueError(f"Unknown channel: {channel}")
 
 
 async def send_daily_report_email(subject: str, body: str) -> None:
-    """End-of-day portfolio digest — always email."""
+    """End-of-day portfolio digest — always email with proper formatting."""
     caspian = get_caspian()
     if not caspian.is_ready:
         raise RuntimeError("Caspian not initialized")
 
-    full_text = f"{subject}\n\n{body}"
-    await caspian.send_email(settings.investor_notify_email, full_text)
-    logger.info("Daily report email queued via Caspian.")
+    subj, html = build_daily_report_html(subject, body)
+    await caspian.send_email(settings.investor_notify_email, subj, body, html)
+    logger.info("Daily report email sent via Caspian.")

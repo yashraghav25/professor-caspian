@@ -32,6 +32,9 @@ class Settings(BaseSettings):
 
     # ── Notification delivery ──
     investor_notify_email: str = "investor@sentinel.ai"
+    # Optional safety contact for an unacknowledged high-severity incident.
+    # Defaults to the investor address, keeping the demo usable without setup.
+    escalation_notify_email: str = ""
     investor_telegram_chat_id: str = ""
     telegram_bot_token: str = ""
     daily_report_hour: int = 18  # 24h UTC hour to send end-of-day email
@@ -60,6 +63,10 @@ class Settings(BaseSettings):
     # ── Timing ──
     alert_cooldown_seconds: int = 300
     escalation_delay_seconds: int = 120
+
+    @property
+    def escalation_recipient(self) -> str:
+        return self.escalation_notify_email or self.investor_notify_email
 
     # ── Severity Score Ranges (PRD Section 30) ──
     info_max: int = 20

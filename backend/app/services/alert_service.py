@@ -10,6 +10,7 @@ from typing import List, Optional
 
 from app.core.logging import get_logger
 from app.models.alert import Alert, AlertStatus
+from app.models.notification import Notification, NotificationStatus
 from app.schemas.alert import AlertResponse
 from app.core.config import settings
 
@@ -108,6 +109,18 @@ class AlertService:
             
         alert.status = AlertStatus.ACKNOWLEDGED
         alert.acknowledged_at = datetime.now(timezone.utc)
+        # An acknowledgement is an incident-level action. Reflect it on every
+        # delivery record so the dashboard can show a complete audit trail.
+        self.db.query(Notification).filter(
+            Notification.alert_id == alert_id,
+            Notification.status.in_([NotificationStatus.PENDING, NotificationStatus.SENT, NotificationStatus.DELIVERED]),
+        ).update(
+            {
+                Notification.status: NotificationStatus.ACKNOWLEDGED,
+                Notification.acknowledged_at: alert.acknowledged_at,
+            },
+            synchronize_session=False,
+        )
         self.db.commit()
         self.db.refresh(alert)
         

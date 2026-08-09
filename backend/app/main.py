@@ -13,6 +13,7 @@ from app.core.database import init_db, SessionLocal
 from app.core.logging import setup_logging, get_logger
 from app.workers.polling_worker import start_polling, stop_polling
 from app.workers.daily_report_worker import start_daily_report_worker, stop_daily_report_worker
+from app.workers.escalation_worker import start_escalation_worker, stop_escalation_worker
 from app.caspian.client import get_caspian
 from app.caspian.listener import start_caspian_listener, stop_caspian_listener
 
@@ -42,6 +43,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(start_polling())
     asyncio.create_task(start_caspian_listener())
     asyncio.create_task(start_daily_report_worker())
+    asyncio.create_task(start_escalation_worker())
 
     logger.info("SentinelAI ready.")
     yield
@@ -50,6 +52,7 @@ async def lifespan(app: FastAPI):
     logger.info("SentinelAI shutting down.")
     await stop_caspian_listener()
     await stop_daily_report_worker()
+    await stop_escalation_worker()
     await stop_polling()
 
 
